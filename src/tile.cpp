@@ -525,23 +525,25 @@ protected:
     }
 
     void drop_my_image () {
-        if (_image && _owned) {
-            _image->drop();
-        }
+        if (!_image) return;
+        _image->drop();
         _image = NULL;
         _owned = false;
     }
 
 
     video::IImage* cleanup_and_return () {
+        for (ImageMap::iterator i = _memory.begin(); i != _memory.end(); ++i) {
+            (*i).second->drop ();
+        }
         video::IImage* ret = _image;
         _image = NULL;
+        _memory.clear ();
         return ret;
     }
 
     void do_new (u32 width, u32 height, u32 color) {
         drop_my_image();
-         (width, height);
         _image = _driver->createImage (video::ECF_A8R8G8B8,
                                        core::dimension2d<u32>(width, height));
         _image->fill (video::SColor (color));
@@ -558,8 +560,9 @@ protected:
 
     void do_forget (const std::string& name) {
         ImageMap::iterator i = _memory.find (name);
-        if (i != _memory.end()) {
-            (*i).second->drop();
+        if (i != _memory.end ()) {
+            (*i).second->drop ();
+            _memory.erase (i);
         }
     }
 
@@ -583,10 +586,11 @@ protected:
 
     void do_crop (int x, int y, int w, int h) {
         assert (_image != NULL);
-        core::dimension2d<u32> dim = _image->getDimension ();
+        core::dimension2d<u32> dim (w, h);
         video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
-        _image->copyTo (tmp, v2s32 (0,0), core::rect<s32> (v2s32 (0,0), dim));
+        _image->copyTo (tmp, v2s32 (0, 0), core::rect<s32> (v2s32 (x, y), dim));
         _image->drop ();
+        _image = tmp;
         _owned = true;
     }
 
