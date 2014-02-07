@@ -467,8 +467,8 @@ public:
     //    luminance -- make luminance of image (weighted grayscale)
     //                  R * 0.299 + G * 0.587 + B * 0.114
     //  operations with buffers:
-    //    memorize name -- create named buffer (local) and place image to it
-    //    remember name -- create copy of named buffer
+    //    store name -- store current image to named buffer (local)
+    //    restore name -- create copy of named buffer
     //    apply name,x,y -- applicate memorized image to position
     //    bitblt name,x,y,xs,ys,w,h -- applicate part of memorized message
     //  operations for drawing
@@ -488,14 +488,37 @@ public:
                 u32 h = atoi (next_arg (command).c_str ());
                 u32 c = parse_color (next_arg (command));
                 do_new (w, h, c);
+                continue;
             } else if (op == "load") {
                 do_load (next_arg (command));
+                continue;
+            } else if (op == "resize" || op == "fit") {
+                u32 w = atoi (next_arg (command).c_str ());
+                u32 h = atoi (next_arg (command).c_str ());
+                do_resize (w, h);
+                continue;
+            } else if (op == "scale") {
+                double sw = atof (next_arg (command).c_str ());
+                double sh = atof (next_arg (command).c_str ());
+                do_scale (sw, sh);
+                continue;
             } else if (op == "crop") {
                 u32 x = atoi (next_arg (command).c_str ());
                 u32 y = atoi (next_arg (command).c_str ());
                 u32 w = atoi (next_arg (command).c_str ());
                 u32 h = atoi (next_arg (command).c_str ());
                 do_crop (x, y, w, h);
+                continue;
+            } else if (op  == "store" || op == "memorize") {
+                do_memorize (next_arg (command));
+                continue;
+            } else if (op == "restore" || op == "remember") {
+                do_remember (next_arg (command));
+            } else if (op == "apply") {
+                std::string name = next_arg (command);
+                u32 x = atoi (next_arg (command).c_str ());
+                u32 y = atoi (next_arg (command).c_str ());
+                do_apply (name, x, y);
                 continue;
             } else {
 
@@ -532,6 +555,12 @@ protected:
     }
 
 
+    video::IImage* get_memorized (const std::string& name) {
+        ImageMap::iterator i = _memory.find (name);
+        return (i == _memory.end ()) ? NULL : (*i).second;
+    }
+
+
     video::IImage* cleanup_and_return () {
         for (ImageMap::iterator i = _memory.begin(); i != _memory.end(); ++i) {
             (*i).second->drop ();
@@ -542,6 +571,7 @@ protected:
         return ret;
     }
 
+
     void do_new (u32 width, u32 height, u32 color) {
         drop_my_image();
         _image = _driver->createImage (video::ECF_A8R8G8B8,
@@ -550,6 +580,7 @@ protected:
         _owned = true;
     }
 
+
     void do_load (const std::string& fname) {
         drop_my_image ();
         _image = _cache->getOrLoad (fname, _device);
@@ -557,6 +588,28 @@ protected:
             _owned = false;
         }
     }
+
+    void do_resize (u32 width, u32 height) {
+        core::dimension2d<u32> dim (width, height);
+        video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
+        _image->copyToScaling (tmp);
+        _image->drop ();
+        _image = tmp;
+        _owned = true;
+    }
+
+
+    void do_scale (double sw, double sh) {
+        core::dimension2d<u32> dim = _image->getDimension ();
+        dim.Width *= sw;
+        dim.Height *= sh;
+        video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
+        _image->copyToScaling (tmp);
+        _image->drop ();
+        _image = tmp;
+        _owned = true;
+    }
+
 
     void do_forget (const std::string& name) {
         ImageMap::iterator i = _memory.find (name);
@@ -569,12 +622,25 @@ protected:
 
     void do_memorize (const std::string& name) {
         if (!_image) return;
-        ensure_for_image_ownership ();
         do_forget (name);
         core::dimension2d<u32> dim = _image->getDimension ();
         video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
         _image->copyTo (tmp, v2s32 (0,0), core::rect<s32> (v2s32 (0,0), dim));
         _memory [name] = tmp;
+    }
+
+
+    void do_remember (const std::string& name) {
+        video::IImage* img = get_memorized (name);
+        if (!img) {
+            return;
+        }
+        drop_my_image ();
+        core::dimension2d<u32> dim = img->getDimension ();
+        _image = _driver->createImage (video::ECF_A8R8G8B8, dim);
+        img->copyTo (_image, v2s32 (0,0),
+                     core::rect<s32> (v2s32 (0,0), dim));
+        _owned = true;
     }
 
 
@@ -594,6 +660,17 @@ protected:
         _owned = true;
     }
 
+
+    void do_apply (const std::string& name, int x, int y) {
+        video::IImage* img = get_memorized (name);
+        if (!img) {
+            return;
+        }
+        ensure_for_image_ownership ();
+        core::dimension2d<u32> dim = img->getDimension ();
+        img->copyTo (_image, v2s32 (x, y),
+                     core::rect<s32> (v2s32 (0,0), dim));
+    }
 }; //class ImageBuilder
 
 /*
