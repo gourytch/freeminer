@@ -17,6 +17,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 
+#include <map>
 #include "tile.h"
 #include "irrlichttypes_extrabloated.h"
 #include "debug.h"
@@ -31,6 +32,159 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "util/container.h"
 #include "util/thread.h"
 #include "util/numeric.h"
+
+
+/**************************************************************************/
+// small toolkit for cut out chunk from strings
+
+bool starts_with(const std::string& haystack, const std::string& needle) {
+    std::string::size_type h_len = haystack.length();
+    std::string::size_type n_len = needle.length();
+    if (h_len < n_len) return false;
+    return haystack.compare(0, n_len, needle) == 0;
+}
+
+std::string strip (const std::string& s) {
+    std::string::size_type ix1 = s.find_first_not_of(' ');
+    std::string::size_type ix2 = s.find_last_not_of(' ');
+    if (ix1 == std::string::npos) {
+        return "";
+    } else {
+        return s.substr (ix1, ix2 - ix1 + 1);
+    }
+}
+
+
+std::string cut (std::string& s, char c, bool stripped = true) {
+    std::string r;
+    std::string::size_type ix = s.find_first_of (c);
+    if (ix == std::string::npos) {
+        r = s;
+        s.clear ();
+    } else {
+        r = s.substr (0, ix);
+        s = s.substr (ix + 1);
+    }
+    return stripped ? strip (r) : r;
+}
+
+
+std::string next_arg (std::string& s) {
+    strip (s);
+    return strip (cut (s, ','));
+}
+
+/**************************************************************************/
+// simple color parser
+
+u8 parse_nibble (char c) {
+    if (c < '0') return 0xFF;
+    if (c <= '9') return c - '0';
+    if (c < 'A') return 0xFF;
+    if (c <= 'F') return c - 'A' + 0x0A;
+    if (c < 'a') return 0xFF;
+    if (c <= 'f') return c - 'a' + 0x0A;
+    return 0xFF;
+}
+
+u8 parse_byte (const std::string& s, bool& got_error) {
+    if (got_error) return 0xFF;
+
+    if (s.length() < 2) {
+       got_error = true;
+        return 0xFF;
+    }
+    u8 a = parse_nibble (s[0]);
+    u8 b = parse_nibble (s[1]);
+    if ((a | b) == 0xFF) {
+        got_error = true;
+        return 0xFF;
+    }
+    // do NOT reset got_error flag!
+    return a * 0x10 + b;
+}
+
+u32 make_color (u8 a, u8 r, u8 g, u8 b) {
+    return (((u32)a << 24) |
+            ((u32)r << 16) |
+            ((u32)g <<  8) |
+            (u32)b);
+}
+
+// string colordef may contains only hex digit and may be one of those formats
+// X - gray color FFXXXXXX
+// MN - gray color FFMNMNMN
+// RGB - FFRRGGBB
+// ARGB - AARRGGBB
+// RrGgBb - FFRrGgBb
+// AaRrGgBb - AaRrGgBb
+// in case bad srtring 0xBADFOODD will returned as result
+u32 parse_color (const std::string& colordef) {
+    static const u32 bad_color = 0xBADF00DD;
+    std::string s = strip (colordef);
+    int s_len = s.length();
+    bool got_error = false;
+    u8 a, r, g, b;
+    switch (s_len) {
+    case 1: // GRAY WITH VOLUME
+        r = parse_nibble(s [0]);
+        if (r != 0xFF) {
+            r += r * 0x10;
+            return make_color (0xFF, r, r, r);
+        }
+    case 2: // GRAY WITH VOLUME
+        r = parse_byte (s, got_error);
+        if (!got_error) {
+            return make_color (0xFF, r, r, r);
+        }
+        break;
+    case 3: // RGB
+        r = parse_nibble (s [0]);
+        g = parse_nibble (s [1]);
+        b = parse_nibble (s [2]);
+        if ((r | g | b) != 0xFF) {
+            r += r * 0x10;
+            g += g * 0x10;
+            b += b * 0x10;
+            return make_color (0xFF, r, g, b);
+        }
+        break;
+    case 4: // ARGB
+        a = parse_nibble (s [0]);
+        r = parse_nibble (s [1]);
+        g = parse_nibble (s [2]);
+        b = parse_nibble (s [3]);
+        if ((a | r | g | b) != 0xFF) {
+            a += a * 0x10;
+            r += r * 0x10;
+            g += g * 0x10;
+            b += b * 0x10;
+            return make_color (a, r, g, b);
+        }
+    case 6: // RRGGBB
+        r = parse_byte (s.substr (0, 2), got_error);
+        g = parse_byte (s.substr (2, 2), got_error);
+        b = parse_byte (s.substr (4, 2), got_error);
+        if (!got_error) {
+            return make_color (0xFF, r, g, b);
+        }
+        break;
+    case 8: // AARRGGBB
+        a = parse_byte (s.substr (0, 2), got_error);
+        r = parse_byte (s.substr (2, 2), got_error);
+        g = parse_byte (s.substr (4, 2), got_error);
+        b = parse_byte (s.substr (6, 2), got_error);
+        if (!got_error) {
+            return make_color (a, r, g, b);
+        }
+        break;
+    default:
+        break;
+    }
+    return bad_color;
+}
+
+/**************************************************************************/
 
 /*
 	A cache from texture name to texture path
@@ -178,6 +332,7 @@ struct TextureInfo
 	}
 };
 
+
 /*
 	SourceImageCache: A cache used for storing source images.
 */
@@ -257,9 +412,185 @@ public:
 		}
 		return img;
 	}
+
 private:
 	std::map<std::string, video::IImage*> m_images;
+
 };
+
+///
+/// ImageBuilder
+///
+class ImageBuilder {
+public:
+
+    ImageBuilder (SourceImageCache *cache,
+                  IrrlichtDevice *device) :
+        _cache (cache),
+        _device (device),
+        _driver (device->getVideoDriver ()),
+        _image (NULL),
+        _owned (false) {
+    }
+
+
+    //  make copy of image and apply sequence of operations
+    //  usage:
+    //    video::IImage* img = ImageBuilder(cache, device).build (commands);
+    //    if (img) {
+    //      // do something with img
+    //      img->drop ();
+    //    }
+    //
+    //  format:
+    //    sequence ::= command[>command[...]]
+    //    command ::= operation [arg[,arg...]]
+    //  examples:
+    //    load face.png -- no operaions. just make copy and return it
+    //    load font.png>crop 10,20,8,10 -- get cropped 8x10 image from pos 10,20
+    //    load font.png>rotate 3 -- rotate image 3 * 90 = 270 degrees
+    //    load font.png>crop 10,20,8,10>mirror h>rotate 2
+    //  operation list and arguments:
+    //
+    //  operations for creating/loading images:
+    //    new W,H,hexcolor -- create an empty image and fill it with color
+    //    load fname.ext -- load an image fname.ext
+    //  change size:
+    //    crop TopX,TopY,Width,Height -- crop image Width*Height at TopX,TopY
+    //    resize NewWidth,NewHeight -- resize image to desired size
+    //  full image transformations:
+    //    rotate N -- rotate 90*N
+    //    mirror h|v|b -- mirror horizontally, vertically or both
+    //    invert -- make negative (255,255,255) (BGR), Alpha left unchanged
+    //    grayscale -- make grayscaled image
+    //                  (R + G + B) / 3
+    //    luminance -- make luminance of image (weighted grayscale)
+    //                  R * 0.299 + G * 0.587 + B * 0.114
+    //  operations with buffers:
+    //    memorize name -- create named buffer (local) and place image to it
+    //    remember name -- create copy of named buffer
+    //    apply name,x,y -- applicate memorized image to position
+    //    bitblt name,x,y,xs,ys,w,h -- applicate part of memorized message
+    //  operations for drawing
+    //    point x,y,hexcolor -- put pixel
+    //    line x,y,w,h,hexcolor -- draw line
+    //    rect x,y,w,h,hexcolor -- drar rectangle
+    //    text hexcolor text -- make colored text label (text without '>'!)
+    ///////////////////////////////////////////////////////////////////////////
+    video::IImage* build (const std::string &program) {
+        std::string commands = strip (program);
+        while (!commands.empty ()) {
+            std::string command = cut (commands, '>');
+            std::string op = cut (command, ' ');
+            // process command
+            if (op == "new") {
+                u32 w = atoi (next_arg (command).c_str ());
+                u32 h = atoi (next_arg (command).c_str ());
+                u32 c = parse_color (next_arg (command));
+                do_new (w, h, c);
+            } else if (op == "load") {
+                do_load (next_arg (command));
+            } else if (op == "crop") {
+                u32 x = atoi (next_arg (command).c_str ());
+                u32 y = atoi (next_arg (command).c_str ());
+                u32 w = atoi (next_arg (command).c_str ());
+                u32 h = atoi (next_arg (command).c_str ());
+                do_crop (x, y, w, h);
+                continue;
+            } else {
+
+            }
+        }
+        ensure_for_image_ownership ();
+        return cleanup_and_return ();
+    }
+
+protected:
+
+    SourceImageCache    *_cache;
+    IrrlichtDevice      *_device;
+    video::IVideoDriver *_driver;
+    video::IImage       *_image;
+    bool                 _owned;
+
+    typedef std::map<std::string, video::IImage*> ImageMap;
+    ImageMap _memory;
+
+
+    void ensure_for_image_ownership () {
+        if (!_image || _owned) {
+            return;
+        }
+        do_clone ();
+    }
+
+    void drop_my_image () {
+        if (_image && _owned) {
+            _image->drop();
+        }
+        _image = NULL;
+        _owned = false;
+    }
+
+
+    video::IImage* cleanup_and_return () {
+        video::IImage* ret = _image;
+        _image = NULL;
+        return ret;
+    }
+
+    void do_new (u32 width, u32 height, u32 color) {
+        drop_my_image();
+         (width, height);
+        _image = _driver->createImage (video::ECF_A8R8G8B8,
+                                       core::dimension2d<u32>(width, height));
+        _image->fill (video::SColor (color));
+        _owned = true;
+    }
+
+    void do_load (const std::string& fname) {
+        drop_my_image ();
+        _image = _cache->getOrLoad (fname, _device);
+        if (_image) {
+            _owned = false;
+        }
+    }
+
+    void do_forget (const std::string& name) {
+        ImageMap::iterator i = _memory.find (name);
+        if (i != _memory.end()) {
+            (*i).second->drop();
+        }
+    }
+
+
+    void do_memorize (const std::string& name) {
+        if (!_image) return;
+        ensure_for_image_ownership ();
+        do_forget (name);
+        core::dimension2d<u32> dim = _image->getDimension ();
+        video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
+        _image->copyTo (tmp, v2s32 (0,0), core::rect<s32> (v2s32 (0,0), dim));
+        _memory [name] = tmp;
+    }
+
+
+    void do_clone () {
+        core::dimension2d<u32> dim = _image->getDimension ();
+        do_crop (0, 0, dim.Width, dim.Height);
+    }
+
+
+    void do_crop (int x, int y, int w, int h) {
+        assert (_image != NULL);
+        core::dimension2d<u32> dim = _image->getDimension ();
+        video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
+        _image->copyTo (tmp, v2s32 (0,0), core::rect<s32> (v2s32 (0,0), dim));
+        _image->drop ();
+        _owned = true;
+    }
+
+}; //class ImageBuilder
 
 /*
 	TextureSource
@@ -1441,6 +1772,19 @@ bool TextureSource::generateImage(std::string part_of_name, video::IImage *& bas
 			baseimg->drop();
 			baseimg = img;
 		}
+        else if (starts_with(part_of_name, "[imagebuild ")) {
+            std::string s = part_of_name;
+            (void)cut (s, ' ');
+            ImageBuilder builder (&m_sourcecache, m_device);
+            video::IImage *img = builder.build (s);
+            if (!img) {
+                errorstream<<"generateImage(): Could not build image "
+                        <<"for part_of_name=\""<<part_of_name
+                        <<"\", cancelling."<<std::endl;
+                return false;
+            }
+            baseimg = img;
+        }
 		else
 		{
 			errorstream<<"generateImage(): Invalid "
