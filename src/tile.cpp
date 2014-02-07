@@ -455,23 +455,27 @@ public:
     //  operations for creating/loading images:
     //    new W,H,hexcolor -- create an empty image and fill it with color
     //    load fname.ext -- load an image fname.ext
+    //
     //  change size:
     //    crop TopX,TopY,Width,Height -- crop image Width*Height at TopX,TopY
     //    resize NewWidth,NewHeight -- resize image to desired size
+    //
     //  full image transformations:
-    //    rotate N -- rotate 90*N
-    //    mirror h|v|b -- mirror horizontally, vertically or both
-    //    invert -- make negative (255,255,255) (BGR), Alpha left unchanged
-    //    grayscale -- make grayscaled image
+    //    rotate N -- rotate 90*N (NIY)
+    //    mirror h|v|b -- mirror horizontally, vertically or both (NIY)
+    //    invert -- make negative (255,255,255) (BGR), Alpha left unchanged (NIY)
+    //    grayscale -- make grayscaled image (NIY)
     //                  (R + G + B) / 3
-    //    luminance -- make luminance of image (weighted grayscale)
+    //    luminance -- make luminance of image (weighted grayscale) (NIY)
     //                  R * 0.299 + G * 0.587 + B * 0.114
+    //
     //  operations with buffers:
     //    store name -- store current image to named buffer (local)
     //    restore name -- create copy of named buffer
     //    apply name,x,y -- applicate memorized image to position
     //    bitblt name,x,y,xs,ys,w,h -- applicate part of memorized message
-    //  operations for drawing
+    //
+    //  operations for drawing (planned)
     //    point x,y,hexcolor -- put pixel
     //    line x,y,w,h,hexcolor -- draw line
     //    rect x,y,w,h,hexcolor -- drar rectangle
@@ -479,49 +483,60 @@ public:
     ///////////////////////////////////////////////////////////////////////////
     video::IImage* build (const std::string &program) {
         std::string commands = strip (program);
-        while (!commands.empty ()) {
+        bool ok = true;
+        while (ok && !commands.empty ()) {
             std::string command = cut (commands, '>');
             std::string op = cut (command, ' ');
+            std::string args = command;
             // process command
             if (op == "new") {
-                u32 w = atoi (next_arg (command).c_str ());
-                u32 h = atoi (next_arg (command).c_str ());
-                u32 c = parse_color (next_arg (command));
-                do_new (w, h, c);
-                continue;
+                u32 w = atoi (next_arg (args).c_str ());
+                u32 h = atoi (next_arg (args).c_str ());
+                u32 c = parse_color (next_arg (args));
+                ok = do_new (w, h, c);
             } else if (op == "load") {
-                do_load (next_arg (command));
-                continue;
+                ok = do_load (next_arg (args));
             } else if (op == "resize" || op == "fit") {
-                u32 w = atoi (next_arg (command).c_str ());
-                u32 h = atoi (next_arg (command).c_str ());
-                do_resize (w, h);
-                continue;
+                u32 w = atoi (next_arg (args).c_str ());
+                u32 h = atoi (next_arg (args).c_str ());
+                ok = do_resize (w, h);
             } else if (op == "scale") {
-                double sw = atof (next_arg (command).c_str ());
-                double sh = atof (next_arg (command).c_str ());
-                do_scale (sw, sh);
-                continue;
+                double sw = atof (next_arg (args).c_str ());
+                double sh = atof (next_arg (args).c_str ());
+                ok = do_scale (sw, sh);
             } else if (op == "crop") {
-                u32 x = atoi (next_arg (command).c_str ());
-                u32 y = atoi (next_arg (command).c_str ());
-                u32 w = atoi (next_arg (command).c_str ());
-                u32 h = atoi (next_arg (command).c_str ());
-                do_crop (x, y, w, h);
-                continue;
+                u32 x = atoi (next_arg (args).c_str ());
+                u32 y = atoi (next_arg (args).c_str ());
+                u32 w = atoi (next_arg (args).c_str ());
+                u32 h = atoi (next_arg (args).c_str ());
+                ok = do_crop (x, y, w, h);
             } else if (op  == "store" || op == "memorize") {
-                do_memorize (next_arg (command));
-                continue;
+                ok = do_memorize (next_arg (args));
             } else if (op == "restore" || op == "remember") {
-                do_remember (next_arg (command));
+                ok = do_remember (next_arg (args));
             } else if (op == "apply") {
-                std::string name = next_arg (command);
-                u32 x = atoi (next_arg (command).c_str ());
-                u32 y = atoi (next_arg (command).c_str ());
-                do_apply (name, x, y);
-                continue;
+                std::string name = next_arg (args);
+                u32 x = atoi (next_arg (args).c_str ());
+                u32 y = atoi (next_arg (args).c_str ());
+                ok = do_apply (name, x, y);
+            } else if (op == "bitblt") {
+                std::string name = next_arg (args);
+                u32 x = atoi (next_arg (args).c_str ());
+                u32 y = atoi (next_arg (args).c_str ());
+                u32 xs = atoi (next_arg (args).c_str ());
+                u32 ys = atoi (next_arg (args).c_str ());
+                u32 w = atoi (next_arg (args).c_str ());
+                u32 h = atoi (next_arg (args).c_str ());
+                ok = do_bitblt (name, x, y, xs, ys, w, h);
             } else {
-
+                ok = false;
+            }
+            if (!ok) {
+                errorstream
+                        <<"ImageBuilder::build(\"" << program
+                       << "\"): operation \"" << op
+                       << "\" with params \"" << command
+                       << "\" failed" << std::endl;
             }
         }
         ensure_for_image_ownership ();
@@ -540,18 +555,19 @@ protected:
     ImageMap _memory;
 
 
-    void ensure_for_image_ownership () {
+    bool ensure_for_image_ownership () {
         if (!_image || _owned) {
-            return;
+            return true;
         }
-        do_clone ();
+        return do_clone ();
     }
 
-    void drop_my_image () {
-        if (!_image) return;
+    bool drop_my_image () {
+        if (!_image) return true;
         _image->drop();
         _image = NULL;
         _owned = false;
+        return true;
     }
 
 
@@ -572,34 +588,48 @@ protected:
     }
 
 
-    void do_new (u32 width, u32 height, u32 color) {
-        drop_my_image();
+    bool do_new (u32 width, u32 height, u32 color) {
+        if (!drop_my_image()) {
+            return false;
+        }
         _image = _driver->createImage (video::ECF_A8R8G8B8,
                                        core::dimension2d<u32>(width, height));
         _image->fill (video::SColor (color));
         _owned = true;
+        return true;
     }
 
 
-    void do_load (const std::string& fname) {
-        drop_my_image ();
-        _image = _cache->getOrLoad (fname, _device);
-        if (_image) {
-            _owned = false;
+    bool do_load (const std::string& fname) {
+        if (!drop_my_image ()) {
+            return false;
         }
+        _image = _cache->getOrLoad (fname, _device);
+        if (!_image) {
+            return false;
+        }
+        _owned = false;
+        return true;
     }
 
-    void do_resize (u32 width, u32 height) {
+    bool do_resize (u32 width, u32 height) {
+        if (!_image) {
+            return false;
+        }
         core::dimension2d<u32> dim (width, height);
         video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
         _image->copyToScaling (tmp);
         _image->drop ();
         _image = tmp;
         _owned = true;
+        return false;
     }
 
 
-    void do_scale (double sw, double sh) {
+    bool do_scale (double sw, double sh) {
+        if (!_image) {
+            return false;
+        }
         core::dimension2d<u32> dim = _image->getDimension ();
         dim.Width *= sw;
         dim.Height *= sh;
@@ -608,69 +638,109 @@ protected:
         _image->drop ();
         _image = tmp;
         _owned = true;
+        return true;
     }
 
 
-    void do_forget (const std::string& name) {
+    bool do_forget (const std::string& name) {
         ImageMap::iterator i = _memory.find (name);
         if (i != _memory.end ()) {
             (*i).second->drop ();
             _memory.erase (i);
         }
+        return true;
     }
 
 
-    void do_memorize (const std::string& name) {
-        if (!_image) return;
-        do_forget (name);
+    bool do_memorize (const std::string& name) {
+        if (!_image) {
+            return false;
+        }
+        if (!do_forget (name)) {
+            return false;
+        }
         core::dimension2d<u32> dim = _image->getDimension ();
         video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
         _image->copyTo (tmp, v2s32 (0,0), core::rect<s32> (v2s32 (0,0), dim));
         _memory [name] = tmp;
+        return true;
     }
 
 
-    void do_remember (const std::string& name) {
+    bool do_remember (const std::string& name) {
         video::IImage* img = get_memorized (name);
         if (!img) {
-            return;
+            return false;
         }
-        drop_my_image ();
+        if (!drop_my_image ()) {
+            return false;
+        }
         core::dimension2d<u32> dim = img->getDimension ();
         _image = _driver->createImage (video::ECF_A8R8G8B8, dim);
         img->copyTo (_image, v2s32 (0,0),
                      core::rect<s32> (v2s32 (0,0), dim));
         _owned = true;
+        return true;
     }
 
 
-    void do_clone () {
+    bool do_clone () {
+        if (!_image) {
+            return false;
+        }
         core::dimension2d<u32> dim = _image->getDimension ();
-        do_crop (0, 0, dim.Width, dim.Height);
+        return do_crop (0, 0, dim.Width, dim.Height);
     }
 
 
-    void do_crop (int x, int y, int w, int h) {
-        assert (_image != NULL);
+    bool do_crop (int x, int y, int w, int h) {
+        if (!_image) {
+            return false;
+        }
         core::dimension2d<u32> dim (w, h);
         video::IImage* tmp = _driver->createImage (video::ECF_A8R8G8B8, dim);
         _image->copyTo (tmp, v2s32 (0, 0), core::rect<s32> (v2s32 (x, y), dim));
         _image->drop ();
         _image = tmp;
         _owned = true;
+        return true;
     }
 
 
-    void do_apply (const std::string& name, int x, int y) {
+    bool do_apply (const std::string& name, int x, int y) {
+        if (!_image) {
+            return false;
+        }
         video::IImage* img = get_memorized (name);
         if (!img) {
-            return;
+            return false;
         }
-        ensure_for_image_ownership ();
+        if (!ensure_for_image_ownership ()) {
+            return false;
+        }
         core::dimension2d<u32> dim = img->getDimension ();
         img->copyTo (_image, v2s32 (x, y),
                      core::rect<s32> (v2s32 (0,0), dim));
+        return true;
     }
+
+
+    bool do_bitblt (const std::string& name, u32 x, u32 y,
+                    u32 xs, u32 ys, u32 w, u32 h) {
+        if (!_image) {
+            return false;
+        }
+        video::IImage* img = get_memorized (name);
+        if (!img) {
+            return false;
+        }
+        ensure_for_image_ownership ();
+        core::dimension2d<u32> dim (w, h);
+        img->copyTo (_image, v2s32 (x, y),
+                     core::rect<s32> (xs, ys, xs + w, ys + h));
+        return true;
+    }
+
 }; //class ImageBuilder
 
 /*
