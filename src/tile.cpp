@@ -418,6 +418,9 @@ private:
 
 };
 
+// forward declaration
+static void blit_with_alpha(video::IImage *src, video::IImage *dst,
+        v2s32 src_pos, v2s32 dst_pos, v2u32 size);
 ///
 /// ImageBuilder
 ///
@@ -488,6 +491,11 @@ public:
             std::string command = cut (commands, '>');
             std::string op = cut (command, ' ');
             std::string args = command;
+            infostream
+                    <<"... OP: \"" << command
+                   << "\", ARGS: \"" << args
+                   << "\"" << std::endl;
+
             // process command
             if (op == "new") {
                 u32 w = atoi (next_arg (args).c_str ());
@@ -505,8 +513,8 @@ public:
                 double sh = atof (next_arg (args).c_str ());
                 ok = do_scale (sw, sh);
             } else if (op == "crop") {
-                u32 x = atoi (next_arg (args).c_str ());
-                u32 y = atoi (next_arg (args).c_str ());
+                s32 x = atoi (next_arg (args).c_str ());
+                s32 y = atoi (next_arg (args).c_str ());
                 u32 w = atoi (next_arg (args).c_str ());
                 u32 h = atoi (next_arg (args).c_str ());
                 ok = do_crop (x, y, w, h);
@@ -516,15 +524,15 @@ public:
                 ok = do_remember (next_arg (args));
             } else if (op == "apply") {
                 std::string name = next_arg (args);
-                u32 x = atoi (next_arg (args).c_str ());
-                u32 y = atoi (next_arg (args).c_str ());
+                s32 x = atoi (next_arg (args).c_str ());
+                s32 y = atoi (next_arg (args).c_str ());
                 ok = do_apply (name, x, y);
             } else if (op == "bitblt") {
                 std::string name = next_arg (args);
-                u32 x = atoi (next_arg (args).c_str ());
-                u32 y = atoi (next_arg (args).c_str ());
-                u32 xs = atoi (next_arg (args).c_str ());
-                u32 ys = atoi (next_arg (args).c_str ());
+                s32 x = atoi (next_arg (args).c_str ());
+                s32 y = atoi (next_arg (args).c_str ());
+                s32 xs = atoi (next_arg (args).c_str ());
+                s32 ys = atoi (next_arg (args).c_str ());
                 u32 w = atoi (next_arg (args).c_str ());
                 u32 h = atoi (next_arg (args).c_str ());
                 ok = do_bitblt (name, x, y, xs, ys, w, h);
@@ -622,7 +630,7 @@ protected:
         _image->drop ();
         _image = tmp;
         _owned = true;
-        return false;
+        return true;
     }
 
 
@@ -693,7 +701,7 @@ protected:
     }
 
 
-    bool do_crop (int x, int y, int w, int h) {
+    bool do_crop (u32 x, u32 y, u32 w, u32 h) {
         if (!_image) {
             return false;
         }
@@ -707,7 +715,7 @@ protected:
     }
 
 
-    bool do_apply (const std::string& name, int x, int y) {
+    bool do_apply (const std::string& name, s32 x, s32 y) {
         if (!_image) {
             return false;
         }
@@ -719,14 +727,15 @@ protected:
             return false;
         }
         core::dimension2d<u32> dim = img->getDimension ();
-        img->copyTo (_image, v2s32 (x, y),
-                     core::rect<s32> (v2s32 (0,0), dim));
+        blit_with_alpha(img, _image,
+                        v2s32 (0, 0), v2s32 (x, y),
+                        v2u32 (dim.Width, dim.Height));
         return true;
     }
 
 
-    bool do_bitblt (const std::string& name, u32 x, u32 y,
-                    u32 xs, u32 ys, u32 w, u32 h) {
+    bool do_bitblt (const std::string& name, s32 x, s32 y,
+                    s32 xs, s32 ys, u32 w, u32 h) {
         if (!_image) {
             return false;
         }
@@ -735,9 +744,8 @@ protected:
             return false;
         }
         ensure_for_image_ownership ();
-        core::dimension2d<u32> dim (w, h);
-        img->copyTo (_image, v2s32 (x, y),
-                     core::rect<s32> (xs, ys, xs + w, ys + h));
+        blit_with_alpha(img, _image,
+                        v2s32 (xs, ys), v2s32 (x, y), v2u32 (w, h));
         return true;
     }
 
